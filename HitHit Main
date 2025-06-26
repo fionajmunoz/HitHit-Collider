@@ -1,0 +1,217 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+import keyboard
+from Phidget22.Phidget import *
+from Phidget22.Net import *
+from Phidget22.Devices.DCMotor import *
+from Phidget22.Devices.VoltageRatioInput import *
+from Phidget22.Devices.Accelerometer import *
+from scipy import integrate
+from Phidget22.Devices.DistanceSensor import *
+
+# Connect to wireless rover
+Net.addServer("", "192.168.100.1", 5661, "", 0)
+
+# Wrapper class for the accelerometer
+class AccelerometersWrapper:
+    def __init__(self):
+        self.accelerometer_fixed_data = []
+        self.accelerometer_fixed_time = []
+
+        self.accelerometer_fixed = Accelerometer()
+        self.accelerometer_fixed.setHubPort(3)
+        self.accelerometer_fixed.openWaitForAttachment(5000)
+        self.accelerometer_fixed.setOnAccelerationChangeHandler(self.accelFixed)
+
+    def accelFixed(self, accelSelf, acceleration, timestamp):
+        self.accelerometer_fixed_data.append(acceleration[0])
+        self.accelerometer_fixed_time.append(timestamp / 1000)
+
+    def get_acceleration_data(self):
+        return np.array(self.accelerometer_fixed_data), np.array(self.accelerometer_fixed_time)
+
+# Wrapper class for controlling the motor
+class MotorControl:
+    def __init__(self, channelID):
+        self.motor = DCMotor()
+        self.motor.setChannel(channelID)
+        self.motor.openWaitForAttachment(5000)
+        self.motor.setAcceleration(self.motor.getMaxAcceleration())
+
+    def setTargetVelocity(self, targetVelocity):
+        self.motor.setTargetVelocity(targetVelocity)
+
+# Computation functions
+def compute_force(acceleration, mass):
+    """ Calculate force based on acceleration and mass. """
+    return mass * acceleration  # F = ma
+
+def compute_impulse(acceleration, time_intervals, mass):
+    """ Calculate impulse using trapezoidal integration of force over time. """
+    force = mass * acceleration
+    return integrate.cumulative_trapezoid(force, time_intervals, initial=0)
+
+def compute_velocity(acceleration, time_intervals):
+    """ Compute velocity from acceleration using trapezoidal integration. """
+    return integrate.cumulative_trapezoid(acceleration, time_intervals, initial=0)
+
+# Initialize motors and joystick
+left_motor = MotorControl(0)   # Left motor
+right_motor = MotorControl(1)  # Right motor
+accelerometer = AccelerometersWrapper()
+sonar = DistanceSensor()
+
+
+vAxis = VoltageRatioInput()  # Vertical (forward/backward)
+hAxis = VoltageRatioInput()  # Horizontal (left/right)
+
+vAxis.setChannel(0)
+hAxis.setChannel(1)
+
+vAxis.openWaitForAttachment(5000)
+hAxis.openWaitForAttachment(5000)
+sonar.openWaitForAttachment(5000)
+
+# Example mass of the system (car + Barbie)
+mass = 0.816  # kg
+
+# Main loop
+while (sonar.getDistance() > 500):
+    # Get joystick input (values between -1 and 1)
+    verticalAxis = vAxis.getVoltageRatio()
+    horizontalAxis = hAxis.getVoltageRatio()
+
+    # Apply a dead zone to ignore small movements
+    DEADZONE = 0.05
+    if abs(verticalAxis) < DEADZONE:
+        verticalAxis = 0
+    if abs(horizontalAxis) < DEADZONE:
+        horizontalAxis = 0
+
+    # Calculate motor speeds
+    leftMotorSpeed = verticalAxis + horizontalAxis
+    rightMotorSpeed = verticalAxis - horizontalAxis
+
+    # Ensure values stay within range [-1, 1]
+    leftMotorSpeed = max(-1, min(1, leftMotorSpeed))
+    rightMotorSpeed = max(-1, min(1, rightMotorSpeed))
+
+    # Apply motor speeds
+    left_motor.setTargetVelocity(leftMotorSpeed)
+    right_motor.setTargetVelocity(rightMotorSpeed)
+
+    # Get accelerometer data
+    acceleration_data, time_data = accelerometer.get_acceleration_data()
+
+    # Compute impulse, force, and velocity if there is enough data
+    if len(acceleration_data) > 1:
+        force_data = compute_force(acceleration_data, mass)
+        velocity_data = compute_velocity(acceleration_data, time_data)
+        impulse_data = compute_impulse(acceleration_data, time_data, mass)
+        print("Distance: " + str(sonar.getDistance()) + " mm")
+
+    # Save acceleration graph if "q" is pressed
+    if keyboard.is_pressed("q"):
+        plt.figure()
+        plt.plot(time_data, acceleration_data, color="red", label="Acceleration (m/s²)")
+        plt.xlabel("Time (s)")
+        plt.ylabel("Acceleration (m/s²)")
+        plt.grid(True)
+        plt.legend()
+        plt.savefig("graph3.png")
+        print("Acceleration graph saved as graph3.png")
+        plt.close()
+        
+    
+how & save all graphs when "V" is pressed
+    if keyboard.is_pressed("z") and len(acceleration_data) > 1:
+        # Create figure with 4 subplots
+        fig, axs = plt.subplots(4, 1, figsize=(8, 12))
+
+        # Acceleration-Time 
+    # SGraph
+        axs[0].plot(time_data, acceleration_data, color="red", label="Acceleration (m/s²)")
+        axs[0].set_ylabel("Acceleration (m/s²)")
+        axs[0].grid(True)
+        axs[0].legend()
+
+        # Force-Time Graph
+        axs[1].plot(time_data, force_data, color="blue", label="Force (N)", linestyle="dashed")
+        axs[1].set_ylabel("Force (N)")
+        axs[1].grid(True)
+        axs[1].legend()
+
+        # Velocity-Time Graph
+        axs[2].plot(time_data, velocity_data, color="green", label="Velocity (m/s)", linestyle="dotted")
+        axs[2].set_ylabel("Velocity (m/s)")
+        axs[2].grid(True)
+        axs[2].legend()
+
+        # Impulse-Time Graph
+        axs[3].plot(time_data, impulse_data, color="purple", label="Impulse (Ns)", linestyle="dashdot")
+        axs[3].set_xlabel("Time (s)")
+        axs[3].set_ylabel("Impulse (Ns)")
+        axs[3].grid(True)
+        axs[3].legend()
+
+        # Adjust layout
+        plt.tight_layout()
+        plt.suptitle("Acceleration, Force, Velocity, and Impulse-Time Graphs", fontsize=14)
+
+        # Save and show graph
+        plt.savefig("all_graphs.png")
+        print("All graphs saved as all_graphs.png")
+        plt.show()
+
+        left_motor.setTargetVelocity(0)
+        right_motor.setTargetVelocity(0)
+        print("Motors stopped.")
+        
+            
+        break  # Exit the loop
+    
+while (sonar.getDistance() < 500):
+        #Object detected! Stop motors
+    left_motor.setTargetVelocity(0)
+    right_motor.setTargetVelocity(0)
+    # Wait for 100 milliseconds
+    time.sleep(0.1)
+        
+    if keyboard.is_pressed("z") and len(acceleration_data) > 1:
+        # Create figure with 4 subplots
+        fig, axs = plt.subplots(4, 1, figsize=(8, 12))
+
+        # Acceleration-Time Graph
+        axs[0].plot(time_data, acceleration_data, color="red", label="Acceleration (m/s²)")
+        axs[0].set_ylabel("Acceleration (m/s²)")
+        axs[0].grid(True)
+        axs[0].legend()
+
+        # Force-Time Graph
+        axs[1].plot(time_data, force_data, color="blue", label="Force (N)", linestyle="dashed")
+        axs[1].set_ylabel("Force (N)")
+        axs[1].grid(True)
+        axs[1].legend()
+
+        # Velocity-Time Graph
+        axs[2].plot(time_data, velocity_data, color="green", label="Velocity (m/s)", linestyle="dotted")
+        axs[2].set_ylabel("Velocity (m/s)")
+        axs[2].grid(True)
+        axs[2].legend()
+
+        # Impulse-Time Graph
+        axs[3].plot(time_data, impulse_data, color="purple", label="Impulse (Ns)", linestyle="dashdot")
+        axs[3].set_xlabel("Time (s)")
+        axs[3].set_ylabel("Impulse (Ns)")
+        axs[3].grid(True)
+        axs[3].legend()
+
+        # Adjust layout
+        plt.tight_layout()
+        plt.suptitle("Acceleration, Force, Velocity, and Impulse-Time Graphs", fontsize=14)
+
+        # Save and show graph
+        plt.savefig("all_graphs.png")
+        print("All graphs saved as all_graphs.png")
+        plt.show()
